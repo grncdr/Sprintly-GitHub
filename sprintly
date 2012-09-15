@@ -84,12 +84,6 @@ class SprintlyTool:
         exists with the same name, user will be prompted to replace the file.
         """
 
-        # must be run as root
-        euid = os.geteuid()
-        if euid != 0:
-            print 'Must be run as root. Try re-running with sudo.'
-            return
-
         print 'Downloading latest version of sprintly from GitHub...'
 
         # get the file
