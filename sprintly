@@ -14,7 +14,7 @@ from optparse import OptionParser
 # constants
 CONFIG_VERSION = '2'
 SOURCE_URL = os.environ.get('SPRINTLY_SOURCE_URL',
-                            'https://raw.github.com/nextbigsoundinc/Sprintly-GitHub/master/')
+                            'https://raw.github.com/grncdr/Sprintly-GitHub/master/')
 SPRINTLY_SOURCE_URL = SOURCE_URL + 'sprintly'
 COMMIT_MSG_SOURCE_URL = SOURCE_URL + 'commit-msg'
 
