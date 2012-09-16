@@ -11,6 +11,8 @@
 	Options:
 	  -h, --help        show this help message and exit
 	  --install         install this tool
+    --prefix          directory to install script and hooks into (default
+            /usr/local)
 	  --update          update this tool
 	  --install-hook    install commit-msg hook in current directory (must be a
 						git repository)
@@ -25,8 +27,11 @@ The `sprintly` tool can now install itself. Follow the instructions below to get
 	// download the latest version of the tool
 	curl -O https://raw.github.com/nextbigsoundinc/Sprintly-GitHub/master/sprintly
 
-	// install
+	// install to /usr/local, owned by root
 	sudo python sprintly --install
+
+	// or install to homedir owned by yourself
+	python sprintly --install --prefix $HOME
 
 	// clean up
 	rm sprintly
