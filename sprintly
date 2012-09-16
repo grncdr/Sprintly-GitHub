@@ -2,6 +2,7 @@
 
 import sys
 import os
+import os.path as path
 import urllib2
 import json
 import shutil
@@ -12,16 +13,10 @@ from optparse import OptionParser
 
 # constants
 CONFIG_VERSION = '2'
-SPRINTLY_NAME = 'sprintly'
-SPRINTLY_DIR = '/usr/local/bin/'
-HOOK_NAME = 'commit-msg'
-HOOK_DIR = '/usr/local/share/sprintly/'
-SPRINTLY_SOURCE_URL = 'https://raw.github.com/nextbigsoundinc/Sprintly-GitHub/master/sprintly'
-COMMIT_MSG_SOURCE_URL = 'https://raw.github.com/nextbigsoundinc/Sprintly-GitHub/master/commit-msg'
-
-# non-editable constants
-SPRINTLY_PATH = SPRINTLY_DIR + SPRINTLY_NAME
-HOOK_PATH = HOOK_DIR + HOOK_NAME
+SOURCE_URL = os.environ.get('SPRINTLY_SOURCE_URL',
+                            'https://raw.github.com/nextbigsoundinc/Sprintly-GitHub/master/')
+SPRINTLY_SOURCE_URL = SOURCE_URL + 'sprintly'
+COMMIT_MSG_SOURCE_URL = SOURCE_URL + 'commit-msg'
 
 
 class SprintlyTool:
@@ -36,9 +31,14 @@ class SprintlyTool:
         """
 
         self._config = {}
-        self._sprintlyDirectoryPath = None
-        self._sprintlyConfigPath = None
-        self._sprintlyCachePath = None
+        # get the users home directory
+        home = path.expanduser('~')
+        if home == '~':
+            raise SprintlyException('Unable to expand home directory.')
+
+        self._sprintlyDirectoryPath = path.join(home, '.sprintly')
+        self._sprintlyConfigPath = path.join(self._sprintlyDirectoryPath, 'sprintly.config')
+        self._sprintlyCachePath = path.join(self._sprintlyDirectoryPath, 'sprintly.cache')
 
     def run(self):
         """
@@ -50,12 +50,21 @@ class SprintlyTool:
             usage = 'Usage: %prog [options]\n\nBy default, your sprintly items will be shown.\n\nWhen using the commit-msg hook, you will be prompted for a Sprint.ly item number unless you include a Sprint.ly keyword/item number in your commit message:\n\n  \'Commit message goes here. References #54. Closes #65.\'\n\nValid Sprint.ly keywords are:\n\n  close, closes, closed, fix, fixed, fixes, addresses, re, ref, refs, references, see, breaks, unfixes, reopen, reopens, re-open, re-opens\n\nAs a shortcut, you may also include an item number as the first word in your commit message:\n\n  \'#26 Message goes here\'\n\nThe hook will automatically prepend the keyword \'references\' and you won\'t be asked to provide an item number. This shortcut only works at the beginning of the message and does not support multiple item numbers.'
             parser = OptionParser(usage=usage)
             parser.add_option('--install', dest='install', help='install this tool', action='store_true', default=False)
+            parser.add_option('--prefix', dest='install_prefix', help='base directory for install. (default /usr/local)')
             parser.add_option('--update', dest='update', help='update this tool', action='store_true', default=False)
             parser.add_option('--install-hook', dest='installHook', help='install commit-msg hook in current directory (must be a git repository)', action='store_true', default=False)
             parser.add_option('--uninstall-hook', dest='uninstallHook', help='uninstall commit-msg hook in current directory (must be a git repository)', action='store_true', default=False)
             parser.add_option('--update-config', dest='updateConfig', help='edit configuration', action='store_true', default=False)
 
             (options, _) = parser.parse_args()
+
+            # determine the prefix for the main script and commit hook
+            if options.install_prefix:
+                self._prefix = options.install_prefix
+            elif options.update:
+                self._prefix = path.abspath(path.join(path.dirname(__file__), '..'))
+            else:
+                self._prefix = '/usr/local'
 
             # if the user wants to install, do it before we initialize (they will re-run once installed)
             if options.install or options.update:
@@ -80,7 +89,7 @@ class SprintlyTool:
 
     def install(self, update):
         """
-        Install this tool at SPRINTLY_PATH. If another file already
+        Install this tool at bin_dir/sprintly. If another file already
         exists with the same name, user will be prompted to replace the file.
         """
 
@@ -93,39 +102,19 @@ class SprintlyTool:
         except Exception:
             raise SprintlyException('Unable to obtain commit-msg from %s' % SPRINTLY_SOURCE_URL)
 
-        # verify nothing exists at the target path
-        target = SPRINTLY_PATH
-        if os.path.isfile(target):
-            overwrite = raw_input('A file already exists at %s. Overwrite file? ' % target)
-            while overwrite != 'y' and overwrite != 'n':
-                overwrite = raw_input('Please enter y/n: ')
-
-            if overwrite == 'n':
-                print 'Unable to install. Please install manually.'
-                return
-
-            # remove existing file
-            print 'Deleting %s...' % target
+        # try loading config
+        if update:
             try:
-                os.unlink(target)
-            except Exception:
-                raise SprintlyException('Unable to remove %s' % target)
+                self.loadFromConfig()
+            except:
+                pass
 
-        # copy file to target
-        try:
-            if not os.path.isdir(SPRINTLY_DIR):
-                os.makedirs(SPRINTLY_DIR)
-            target_file = open(target, 'w')
-            target_file.write(sprintly_file_contents)
-            target_file.close()
-        except Exception:
-            raise SprintlyException('Unable to save file to %s' % target)
+        # verify nothing exists at the target path
 
-        # ensure it is executable
-        try:
-            subprocess.call(['chmod', '+x', target])
-        except Exception:
-            raise SprintlyException('Unable to make %s executable.' % target)
+        target = path.join(self._prefix, 'bin', 'sprintly')
+
+        # copy file to target and ensure it is executable
+        self._writeFileContents(target, sprintly_file_contents, confirm_overwrite=True, mode=0755)
 
         # done!
         print 'Successfully installed sprintly to %s' % target
@@ -147,31 +136,18 @@ class SprintlyTool:
         also be created during this step.
         """
 
-        # get the users home directory
-        home = os.path.expanduser('~')
-        if home == '~':
-            raise SprintlyException('Unable to expand home directory.')
-
-        # set the sprintly directory path (create if it doesn't exist)
-        self._sprintlyDirectoryPath = os.path.join(home, '.sprintly')
-        if not os.path.isdir(self._sprintlyDirectoryPath):
+        if not path.isdir(self._sprintlyDirectoryPath):
             os.mkdir(self._sprintlyDirectoryPath, 0700)
-            if not os.path.isdir(self._sprintlyDirectoryPath):
+            if not path.isdir(self._sprintlyDirectoryPath):
                 raise SprintlyException('Unable to create folder at %s' % self._sprintlyDirectoryPath)
 
         # set the sprintly config path (create if it doesn't exist)
-        self._sprintlyConfigPath = os.path.join(self._sprintlyDirectoryPath, 'sprintly.config')
-        if not os.path.isfile(self._sprintlyConfigPath):
+        if not path.isfile(self._sprintlyConfigPath):
             self.createSprintlyConfig()
 
         # set the sprintly cache path (create if it doesn't exist)
-        self._sprintlyCachePath = os.path.join(self._sprintlyDirectoryPath, 'sprintly.cache')
-        if not os.path.isfile(self._sprintlyCachePath):
-            try:
-                # "touch" cache file
-                open(self._sprintlyCachePath, 'w').close()
-            except Exception:
-                raise SprintlyException('Unable to create file at %s' % self._sprintlyCachePath)
+        if not path.isfile(self._sprintlyCachePath):
+            self._writeFileContents(self._sprintlyCachePath, '', mode=0700)
 
         # load config values
         self.loadFromConfig()
@@ -260,17 +236,7 @@ class SprintlyTool:
 
         # write config file if all is good
         serialized_config = json.dumps(self._config)
-
-        try:
-            config_file = open(self._sprintlyConfigPath, 'w')
-            config_file.write(serialized_config)
-            config_file.close()
-            if not update:
-                print 'Configuration successfully created.'
-            else:
-                print 'Configuration successfully updated.'
-        except:
-            raise SprintlyException('Unable to write configuration to disk at %s' % self._sprintlyConfigPath)
+        self._writeFileContents(self._sprintlyConfigPath, serialized_config, mode=0700)
 
     def loadFromConfig(self):
         """
@@ -279,12 +245,12 @@ class SprintlyTool:
         """
 
         try:
-            config_file = open(self._sprintlyConfigPath, 'r')
-            serialized_config = config_file.readline()
-            config_file.close()
-            self._config = json.loads(serialized_config)
-        except:
-            raise SprintlyException('Unable to read credentials from disk at %s' % self._sprintlyConfigPath)
+            config = open(self._sprintlyConfigPath)
+            self._config = json.load(config)
+            config.close()
+        except Exception as e:
+            raise SprintlyException('Unable to read credentials from disk at %s:\n\t%s'
+                                    % (self._sprintlyConfigPath, e))
 
         # validate version
         if 'version' not in self._config or self._config['version'] != CONFIG_VERSION:
@@ -406,11 +372,8 @@ class SprintlyTool:
                 product['items'] = itemsTree
                 cache['products'].append(product)
 
-            serialized_cache = json.dumps(cache)
+            self._writeFileContents(self._sprintlyCachePath, json.dumps(cache))
 
-            cache_file = open(self._sprintlyCachePath, 'w')
-            cache_file.write(serialized_cache)
-            cache_file.close()
         except Exception:
             print '\033[91m'
             print 'Unable to populate cache. List may not be up to date.'
@@ -488,22 +451,23 @@ class SprintlyTool:
 
         # ensure the current directory is a git repository
         directory = os.getcwd()
-        hooks_directory = os.path.join(directory, '.git', 'hooks')
-        if not os.path.isdir(hooks_directory):
+        hooks_directory = path.join(directory, '.git', 'hooks')
+        if not path.isdir(hooks_directory):
             raise SprintlyException('This command can only be run from the root of a git repository.')
 
+        hook_path = path.join(self._prefix, 'share', 'sprintly', 'commit-msg')
         # ensure hook is installed
-        if not os.path.isfile(HOOK_PATH):
+        if not path.isfile(hook_path):
             raise SprintlyException('Please run \'sprintly --update\' first to install the hook.')
 
         # create a symlink to the commit-msg file
-        destination = os.path.join(hooks_directory, HOOK_NAME)
+        destination = path.join(hooks_directory, 'commit-msg')
 
         # if the destination is a file, move it; if it's a symlink, delete it
         try:
-            if os.path.isfile(destination) and not os.path.islink(destination):
+            if path.isfile(destination) and not path.islink(destination):
                 shutil.move(destination, destination + '.original')
-            elif os.path.islink(destination):
+            elif path.islink(destination):
                 os.unlink(destination)
         except Exception:
             raise SprintlyException('File already exists at %s. Please delete it before proceeding.' % destination)
@@ -511,7 +475,7 @@ class SprintlyTool:
         print 'Creating symlink...'
 
         try:
-            os.symlink(HOOK_PATH, destination)
+            os.symlink(hook_path, destination)
         except Exception:
             raise SprintlyException('Unable to create symlink.')
 
@@ -537,18 +501,18 @@ class SprintlyTool:
 
         # ensure the current directory is a git repository
         directory = os.getcwd()
-        hooks_directory = os.path.join(directory, '.git', 'hooks')
-        if not os.path.isdir(hooks_directory):
+        hooks_directory = path.join(directory, '.git', 'hooks')
+        if not path.isdir(hooks_directory):
             raise SprintlyException('This command can only be run from the root of a git repository.')
 
         # get path to commit-msg file
-        destination = os.path.join(hooks_directory, HOOK_NAME)
+        destination = path.join(hooks_directory, 'commit-msg')
 
         # if the destination is a file, error; if it's a symlink, delete it
         try:
-            if os.path.isfile(destination) and not os.path.islink(destination):
+            if path.isfile(destination) and not path.islink(destination):
                 raise SprintlyException('The commit-msg hook was not installed by this tool. Please remove it manually.')
-            elif os.path.islink(destination):
+            elif path.islink(destination):
                 os.unlink(destination)
             else:
                 print 'Hook is already uninstalled.'
@@ -576,28 +540,61 @@ class SprintlyTool:
         except Exception:
             raise SprintlyException('Unable to obtain commit-msg from %s' % COMMIT_MSG_SOURCE_URL)
 
-        # ensure directory exists
-        try:
-            if not os.path.exists(HOOK_DIR):
-                os.makedirs(HOOK_DIR, 0777)
-        except Exception:
-            raise SprintlyException('Unable to create directory %s' % HOOK_DIR)
-
-        # save the file
-        try:
-            commit_msg_file = open(HOOK_PATH, 'w')
-            commit_msg_file.write(commit_msg_file_contents)
-            commit_msg_file.close()
-        except Exception:
-            raise SprintlyException('Unable to save file to %s' % HOOK_PATH)
-
+        hook_path = path.join(self._prefix, 'share', 'sprintly', 'commit-msg')
         # make sure user can read, write, and execute
-        try:
-            os.chmod(HOOK_PATH, 0777)
-        except Exception:
-            raise SprintlyException('Unable to make %s executable.' % HOOK_PATH)
+        self._writeFileContents(hook_path, commit_msg_file_contents, mode=0755)
 
-        print 'Hook was updated at %s' % HOOK_PATH
+        print 'Hook was updated at %s' % hook_path
+
+    def _writeFileContents(self, target, content, confirm_overwrite=False, mode=None):
+        """
+        Write data to a file, wrapping any exceptions in a SprintlyException.
+
+        :param target: The file path to write to.
+        :param content: The data to write.
+        :param confirm_overwrite: Ask before overwriting an existing file.
+        :param mode: If not None, set file permissions after writing.
+        """
+
+        directory, filename = path.split(target)
+        err_msg = 'Unable to write file %s.' % target
+        if not path.exists(directory):
+            try:
+                os.makedirs(directory)
+            except Exception:
+                raise SprintlyException(err_msg + (" Could not create %s" % directory))
+
+        if not path.isdir(directory):
+            raise SprintlyException(err_msg + (' %s is not a directory' % directory))
+
+        if confirm_overwrite and path.isfile(target):
+            overwrite = raw_input('A file already exists at %s. Overwrite file? ' % target)
+            while overwrite != 'y' and overwrite != 'n':
+                overwrite = raw_input('Please enter y/n: ')
+
+            if overwrite == 'n':
+                raise SprintlyException('Could not overwrite file %s.' % target)
+                return
+
+            # remove existing file
+            print 'Deleting %s...' % target
+            try:
+                os.unlink(target)
+            except Exception:
+                raise SprintlyException('Unable to remove %s' % target)
+
+        try:
+            fh = open(target, 'w')
+            fh.write(content)
+            fh.close()
+        except:
+            raise SprintlyException(err_msg)
+
+        if mode:
+            try:
+                os.chmod(target, mode)
+            except:
+                raise SprintlyException("Could not set mode on %s." % target)
 
 
 class SprintlyException(Exception):
